@@ -2,6 +2,8 @@
 
 *How we built mlx-audiocraft: the first package that runs both MusicGen and AudioGen (text-to-sound-effects) on M-series Macs using MLX.*
 
+![Cover illustration — sound waves flowing through a neural network](blog-images/cover.png)
+
 ---
 
 ## Why I built this
@@ -30,7 +32,9 @@ I chose the third option. This post is the full story of how that went.
 
 ## What is MLX and why does it matter for this
 
-MLX is Apple's own machine learning framework, released in late 2023. The key thing to understand is the memory model:
+![Unified memory — CPU and GPU sharing the same memory pool on Apple Silicon](blog-images/mlx-unified-memory.png)
+
+MLX is Apple's own machine learning framework, released in late 2023. The key thing to understand is the memory model.
 
 On a normal computer, the CPU has its RAM and the GPU has its VRAM. Copying data between them takes time — this is why PyTorch has `.to("cuda")` and `.to("cpu")` calls everywhere. Every time you move a tensor between CPU and GPU you pay a transfer cost.
 
@@ -54,6 +58,8 @@ AudioCraft has two models you've probably heard of:
 Here's the surprising thing: **they use the exact same architecture**. Same transformer language model. Same audio codec. The only differences are what they were trained on and a few config values.
 
 The pipeline for both looks like this:
+
+![Generation pipeline — text flows through T5 encoder, transformer, and EnCodec decoder to produce audio](blog-images/pipeline.png)
 
 ```
 Your text prompt
@@ -112,6 +118,8 @@ So the plan became: **fork musicgen-mlx, add AudioGen, publish as a new package 
 ---
 
 ## How we ported AudioGen: the actual code
+
+![BaseGenModel is the parent — both MusicGen and AudioGen inherit from it](blog-images/inheritance.png)
 
 Here's where it gets interesting.
 
@@ -209,7 +217,7 @@ state_dict = convert_lm_weights(pkg['best_state'])  # numpy weight conversion
 _load_weights_into_model(model, state_dict)     # load numpy → mx.array
 ```
 
-The `convert_lm_weights` function in `utils/weight_convert.py` handles transposing linear layer weights where needed, renaming keys to match MLX conventions, and converting PyTorch tensors to numpy arrays (which then become `mx.array`).
+The `convert_lm_weights` function handles transposing linear layer weights where needed, renaming keys to match MLX conventions, and converting PyTorch tensors to numpy arrays (which then become `mx.array`).
 
 A subtlety: the checkpoint also contains T5 conditioner weights. These get split out during loading:
 
@@ -239,16 +247,14 @@ The transformer LM generates audio tokens auto-regressively. For 5 seconds of au
 
 - The LM takes all previously generated tokens + the T5 embeddings as input
 - Cross-attention layers allow each token to attend to the T5 embeddings
-- The output is a probability distribution over the codebook vocabulary (1024 tokens per codebook × 4 codebooks = 4096 possible values at each step, generated in parallel for all codebooks)
+- The output is a probability distribution over the codebook vocabulary
 - We sample from this distribution (top-k sampling with k=250 by default)
 
-Classifier-free guidance (CFG) means the LM actually runs twice per step: once with the text conditioning ("dog barking") and once unconditionally (empty text). The final logits are a linear interpolation between the two: `logits = uncond + cfg_coef * (cond - uncond)`. This pushes the generation toward the text description. `cfg_coef=3.0` means "3x push toward the conditioned direction."
+Classifier-free guidance (CFG) means the LM actually runs twice per step: once with the text conditioning ("dog barking") and once unconditionally (empty text). The final logits are a linear interpolation: `logits = uncond + cfg_coef * (cond - uncond)`. This pushes the generation toward the text description. `cfg_coef=3.0` means "3x push toward the conditioned direction."
 
 **Step 3: Audio decoding (GPU, MLX)**
 
-The generated token sequence `[batch, codebooks, time_steps]` is fed to the EnCodec decoder. This is a convolutional neural network (SEANet architecture) that upsamples the discrete tokens back into a continuous waveform at 16 kHz.
-
-For 5 seconds at 16 kHz, the output is `[1, 1, 80000]` — batch × channels × samples.
+The generated token sequence `[batch, codebooks, time_steps]` is fed to the EnCodec decoder. This is a convolutional neural network that upsamples the discrete tokens back into a continuous waveform at 16 kHz. For 5 seconds at 16 kHz, the output is `[1, 1, 80000]` — batch × channels × samples.
 
 **Step 4: Save**
 
@@ -268,7 +274,7 @@ Repeat until we have enough tokens
 Concatenate and return
 ```
 
-`extend_stride=3.0` means we overlap by 3 seconds between windows, giving the model enough context to maintain continuity. This works because the transformer can condition on previously generated tokens as a prompt.
+`extend_stride=3.0` means we overlap by 3 seconds between windows, giving the model enough context to maintain continuity.
 
 ---
 
@@ -302,22 +308,11 @@ musicgen-mlx = "mlx_audiocraft.cli:musicgen_main"
 audiogen-mlx = "mlx_audiocraft.cli:audiogen_main"
 ```
 
-The `torch` dependency deserves a note: it's CPU-only here. We only use PyTorch for T5 text encoding. You don't need CUDA, MPS, or any GPU-side PyTorch. If you already have PyTorch installed for something else, that works too.
-
-### CLI entry points
-
-`[project.scripts]` means after `pip install mlx-audiocraft`, users get two new commands in their PATH:
-
-```bash
-musicgen-mlx "calm piano music, 120 BPM, no vocals" -d 30 -o music.wav
-audiogen-mlx "rain on a window, distant thunder" -d 8 -o rain.wav
-```
-
-These resolve directly to `mlx_audiocraft.cli:musicgen_main` and `mlx_audiocraft.cli:audiogen_main`.
+The `torch` dependency is CPU-only here — only used for T5 text encoding. You don't need CUDA, MPS, or any GPU-side PyTorch.
 
 ### Credential-free PyPI publishing via OIDC
 
-Instead of storing a PyPI API token as a GitHub secret, we use GitHub Actions OIDC trusted publishing. The workflow is triggered on GitHub releases:
+Instead of storing a PyPI API token as a GitHub secret, we use GitHub Actions OIDC trusted publishing. The workflow triggers on GitHub releases and uses short-lived OIDC tokens that PyPI and GitHub exchange automatically — no credentials stored anywhere:
 
 ```yaml
 on:
@@ -328,21 +323,18 @@ jobs:
   publish:
     environment: pypi
     permissions:
-      id-token: write  # OIDC token — no password needed
+      id-token: write  # OIDC — no password needed
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
       - run: pip install build && python -m build
       - uses: pypa/gh-action-pypi-publish@release/v1
 ```
 
-On the PyPI side, you register the repo as a "trusted publisher". PyPI and GitHub handshake using short-lived OIDC tokens. No credentials stored anywhere. It's the right way to do this in 2026.
-
 ---
 
 ## Results
+
+![Audio waveforms — the final output: clean, natural-sounding audio generated entirely on-device](blog-images/results-audio.png)
 
 Here's what actually running this feels like on an M4 Max with 64 GB unified memory.
 
@@ -376,12 +368,12 @@ For context: this is running on a single consumer laptop, offline, with no API c
 Honestly better than I expected. AudioGen is genuinely impressive for sound effects:
 
 - **"keyboard typing on a mechanical keyboard, quiet office"** → sounds like the real thing. You can hear the subtle variation between keystrokes.
-- **"crowd applause, conference room"** → realistic room reverb, natural crowd dynamics
-- **"rain on a metal roof, distant thunder"** → the thunder timing and reverb are convincing
+- **"crowd applause, conference room"** → realistic room reverb, natural crowd dynamics.
+- **"rain on a metal roof, distant thunder"** → the thunder timing and reverb are convincing.
 
 MusicGen through this port sounds identical to what you'd get from ACE-Step or the original Meta demo. The MLX execution doesn't affect output quality — we're running the exact same weights with the same arithmetic, just on different hardware.
 
-One thing I noticed: **musicgen-small is surprisingly good for the size**. At 300M parameters and 1.3x realtime on musicgen-small, it's the sweet spot for quick prototyping. musicgen-large gets you noticeably better compositional structure and less repetition, but you're waiting 35 seconds per 10-second clip.
+One thing I noticed: **musicgen-small is surprisingly good for the size**. At 300M parameters and ~1x realtime, it's the sweet spot for quick prototyping. musicgen-large gets you noticeably better compositional structure and less repetition, but you're waiting 35 seconds per 10-second clip.
 
 ---
 
@@ -393,17 +385,15 @@ One thing I noticed: **musicgen-small is surprisingly good for the size**. At 30
 
 **Packaging matters more than the code.** Writing `audiogen.py` took an afternoon. Getting the package to `pip install` cleanly, with proper entry points, pyproject.toml, OIDC publishing, and a README that explains things clearly — that took about as long again. If you want people to actually use your open source work, the packaging is as important as the implementation.
 
-**Apple Silicon is a real ML platform now.** M4 Max at 0.17x realtime for a 1.5B-parameter model, offline, no GPU rental, on a laptop. It's not H100 speed, but for inference workloads that don't need real-time generation, it's more than good enough. And the experience of having everything in unified memory — no `.to("cuda")`, no out-of-memory errors, no device management — is genuinely nicer to work with.
+**Apple Silicon is a real ML platform now.** M4 Max at 0.17x realtime for a 1.5B-parameter model, offline, no GPU rental, on a laptop. It's not H100 speed, but for inference workloads that don't need real-time generation it's more than good enough. And the experience of having everything in unified memory — no `.to("cuda")`, no out-of-memory errors, no device management — is genuinely nicer to work with.
 
 ---
 
 ## What's next
 
-A few things I want to add:
-
-- **AudioGen stereo** — the medium model is mono (16 kHz, 1 channel). There are stereo variants for MusicGen; a stereo AudioGen would be great for immersive video work.
-- **Streaming generation** — currently we wait for the whole clip before returning. The sliding window implementation already generates chunk-by-chunk internally; exposing a streaming API would let you start playing audio while generation continues.
-- **Fine-tuning** — MLX supports training, not just inference. Fine-tuning AudioGen on a custom sound effects library (or MusicGen on a specific music style) should be possible with the current architecture.
+- **AudioGen stereo** — the medium model is mono (16 kHz, 1 channel). Stereo AudioGen would be great for immersive video work.
+- **Streaming generation** — currently we wait for the whole clip before returning. Exposing a streaming API would let you start playing audio while generation continues.
+- **Fine-tuning** — MLX supports training, not just inference. Fine-tuning AudioGen on a custom sound effects library should be possible with the current architecture.
 - **Real benchmark script** — `benchmarks/run_benchmarks.py` runs a reproducible benchmark and saves results to JSON. If you run it on your machine, please open a PR with your results.
 
 ---
