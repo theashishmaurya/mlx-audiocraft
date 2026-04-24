@@ -7,5 +7,7 @@ build/
 *.wav
 *.mp3
 *.flac
+!docs/audio/*.wav
+!docs/audio/*.wav
 benchmarks/results.json
 .DS_Store
