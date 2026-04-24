@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlx-audiocraft"
+version = "0.1.0"
+description = "MusicGen + AudioGen on Apple Silicon via MLX — full AudioCraft for M-series Macs, no CUDA needed"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Ashish Maurya", email = "ashish.1999vns@gmail.com" }
+]
+keywords = ["mlx", "apple-silicon", "musicgen", "audiogen", "audiocraft", "music-generation", "sound-effects", "text-to-audio"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "mlx>=0.17",
+    "numpy",
+    "torch",          # CPU-only for T5 text encoder
+    "transformers",
+    "huggingface-hub",
+    "omegaconf",
+    "soundfile",
+    "tqdm",
+    "einops",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff"]
+
+[project.scripts]
+musicgen-mlx = "mlx_audiocraft.cli:musicgen_main"
+audiogen-mlx = "mlx_audiocraft.cli:audiogen_main"
+
+[project.urls]
+Homepage = "https://github.com/theashishmaurya/mlx-audiocraft"
+Repository = "https://github.com/theashishmaurya/mlx-audiocraft"
+"Bug Tracker" = "https://github.com/theashishmaurya/mlx-audiocraft/issues"
+
+[tool.setuptools.packages.find]
+include = ["mlx_audiocraft*"]
